@@ -8,6 +8,8 @@ import org.springframework.stereotype.Service;
 import com.rabbitmq.client.Channel;
 
 import java.io.IOException;
+import java.security.NoSuchAlgorithmException;
+import java.security.KeyManagementException;
 import java.util.concurrent.TimeoutException;
 
 @Service
@@ -36,6 +38,7 @@ public class ProducerServiceImpl implements ProducerService {
             factory.setPort(Integer.parseInt(RabbitMqUtil.getRabbitMqPort()));
             factory.setUsername(RabbitMqUtil.getRabbitMqUser());
             factory.setPassword(RabbitMqUtil.getRabbitMqPassword());
+            factory.useSslProtocol();
             Connection connection = factory.newConnection();
             System.out.println("Connection open status"+connection.isOpen());
             Channel channel = connection.createChannel();
@@ -51,6 +54,10 @@ public class ProducerServiceImpl implements ProducerService {
             System.out.println("TimeoutException : " + toe.getMessage());
             toe.printStackTrace();
         }
+	catch (NoSuchAlgorithmException | KeyManagementException securityException) {
+ 	   System.out.println("TLS configuration error: " + securityException.getMessage());
+    	   securityException.printStackTrace();
+	}
         return "response";
     }
 }

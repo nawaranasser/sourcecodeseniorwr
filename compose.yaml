@@ -1,0 +1,217 @@
+name: vprofile
+
+services:
+  db:
+    image: mysql:8.4.10
+    restart: unless-stopped
+
+    environment:
+      MYSQL_DATABASE: accounts
+      MYSQL_USER: vprofile
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+      MYSQL_PASSWORD_FILE: /run/secrets/mysql_app_password
+
+    secrets:
+      - mysql_root_password
+      - mysql_app_password
+
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./src/main/resources/db_backup.sql:/docker-entrypoint-initdb.d/01-db_backup.sql:ro
+
+    networks:
+      - backend
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          MYSQL_PWD="$$(cat /run/secrets/mysql_app_password)"
+          mysql -h 127.0.0.1 -u vprofile -D accounts
+          -e 'SELECT 1' >/dev/null 2>&1
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 45s
+
+    stop_grace_period: 30s
+
+
+  cache:
+    image: memcached:1.6.45-alpine
+    restart: unless-stopped
+
+    command:
+      - memcached
+      - --memory-limit=64
+      - --conn-limit=1024
+      - --threads=2
+      - --verbose
+
+    networks:
+      - backend
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          printf 'version\r\n'
+          | nc -w 2 127.0.0.1 11211
+          | grep -q '^VERSION'
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+    security_opt:
+      - no-new-privileges:true
+
+    cap_drop:
+      - ALL
+
+    read_only: true
+
+    tmpfs:
+      - /tmp
+
+
+  rabbitmq:
+    image: rabbitmq:4.3.2-alpine
+    hostname: rabbitmq
+    restart: unless-stopped
+
+    environment:
+      RABBITMQ_DEFAULT_USER: vprofile
+      RABBITMQ_DEFAULT_VHOST: /
+
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        export RABBITMQ_DEFAULT_PASS="$$(cat /run/secrets/rabbitmq_password)"
+        exec /usr/local/bin/docker-entrypoint.sh rabbitmq-server
+
+    secrets:
+      - rabbitmq_password
+
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
+    networks:
+      - backend
+
+    healthcheck:
+      test:
+        - CMD
+        - rabbitmq-diagnostics
+        - -q
+        - ping
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+    stop_grace_period: 30s
+
+
+
+  app:
+    image: ${APP_IMAGE:-vprofile-app:1.5}
+    restart: unless-stopped
+
+    environment:
+      JDBC_DRIVER_CLASS: com.mysql.cj.jdbc.Driver
+      JDBC_URL: 'jdbc:mysql://db:3306/accounts?useUnicode=true&characterEncoding=UTF-8&zeroDateTimeBehavior=convertToNull&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC'
+      DB_USER: vprofile
+
+      MEMCACHED_ACTIVE_HOST: cache
+      MEMCACHED_ACTIVE_PORT: 11211
+      MEMCACHED_STANDBY_HOST: cache
+      MEMCACHED_STANDBY_PORT: 11211
+
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: vprofile
+      ELASTICSEARCH_HOST: elasticsearch
+      ELASTICSEARCH_PORT: 9300
+      ELASTICSEARCH_CLUSTER: vprofile
+      ELASTICSEARCH_NODE: vprofilenode
+
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        export DB_PASSWORD="$$(cat /run/secrets/mysql_app_password)"
+        export RABBITMQ_PASSWORD="$$(cat /run/secrets/rabbitmq_password)"
+        exec catalina.sh run
+
+    secrets:
+      - mysql_app_password
+      - rabbitmq_password
+
+    depends_on:
+      db:
+        condition: service_healthy
+      cache:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+    ports:
+      - "8080:8080"
+
+    volumes:
+      - uploads_data:/usr/local/tomcat/tmpFiles
+
+    networks:
+      - frontend
+      - backend
+
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -ec
+        - exec 3<>/dev/tcp/127.0.0.1/8080
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+
+    security_opt:
+      - no-new-privileges:true
+
+    cap_drop:
+      - ALL
+
+    pids_limit: 300
+
+    stop_grace_period: 30s    
+
+networks:
+  frontend:
+   
+    
+  backend:
+    internal: true
+
+volumes:
+  mysql_data:
+  rabbitmq_data:
+  uploads_data:
+
+secrets:
+  mysql_root_password:
+    file: ./secrets/mysql_root_password.txt
+
+  mysql_app_password:
+    file: ./secrets/mysql_app_password.txt
+
+  rabbitmq_password:
+    file: ./secrets/rabbitmq_password.txt
+
+
+    
+
+  
+  

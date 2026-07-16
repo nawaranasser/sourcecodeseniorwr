@@ -1,0 +1,14 @@
+.git
+.github
+.vscode
+
+target
+terraform
+secrets
+
+.env
+.env.*
+
+*.log
+*.tfstate
+*.tfstate.*

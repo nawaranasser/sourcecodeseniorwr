@@ -1,0 +1,41 @@
+# IDE files
+.vscode/
+
+# Java/Maven build output
+target/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+secrets/
+
+# Terraform local working directory
+terraform/.terraform/
+
+# Terraform state
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/.terraform.tfstate.lock.info
+
+# Local Terraform variables
+terraform/*.tfvars
+terraform/*.tfvars.json
+!terraform/terraform.tfvars.example
+
+# Terraform plans and crash files
+terraform/*.tfplan
+terraform/*.plan
+terraform/crash.log
+terraform/crash.*.log
+
+# Terraform override files
+terraform/override.tf
+terraform/override.tf.json
+terraform/*_override.tf
+terraform/*_override.tf.json
+
+# Editor and OS files
+*.swp
+*~
+.DS_Store

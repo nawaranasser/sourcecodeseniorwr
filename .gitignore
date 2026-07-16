@@ -39,3 +39,6 @@ terraform/*_override.tf.json
 *.swp
 *~
 .DS_Store
+
+# Local backup files
+*.backup

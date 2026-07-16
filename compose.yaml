@@ -88,7 +88,8 @@ services:
       - /bin/sh
       - -ec
       - |
-        export RABBITMQ_DEFAULT_PASS="$$(cat /run/secrets/rabbitmq_password)"
+        RABBITMQ_DEFAULT_PASS="$$(cat /run/secrets/rabbitmq_password)"
+        export RABBITMQ_DEFAULT_PASS
         exec /usr/local/bin/docker-entrypoint.sh rabbitmq-server
 
     secrets:
@@ -141,8 +142,9 @@ services:
       - /bin/sh
       - -ec
       - |
-        export DB_PASSWORD="$$(cat /run/secrets/mysql_app_password)"
-        export RABBITMQ_PASSWORD="$$(cat /run/secrets/rabbitmq_password)"
+        DB_PASSWORD="$$(cat /run/secrets/mysql_app_password)"
+        RABBITMQ_PASSWORD="$$(cat /run/secrets/rabbitmq_password)"
+        export DB_PASSWORD RABBITMQ_PASSWORD
         exec catalina.sh run
 
     secrets:
@@ -172,7 +174,10 @@ services:
         - CMD
         - bash
         - -ec
-        - exec 3<>/dev/tcp/127.0.0.1/8080
+        - |
+          exec 3<>/dev/tcp/127.0.0.1/8080
+          printf 'GET /login HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3
+          head -n 1 <&3 | grep -q ' 200 '
       interval: 10s
       timeout: 5s
       retries: 12

@@ -1,0 +1,171 @@
+#!/bin/bash
+set -Eeuo pipefail
+
+exec > >(tee -a /var/log/vprofile-bootstrap.log | logger -t vprofile-user-data -s 2>/dev/console) 2>&1
+
+echo "============================================================"
+echo "Starting VProfile EC2 bootstrap"
+echo "============================================================"
+
+# ------------------------------------------------------------
+# Operating system packages
+# ------------------------------------------------------------
+
+dnf upgrade -y
+dnf install -y docker git openssl
+
+systemctl enable --now docker
+systemctl enable --now amazon-ssm-agent || true
+
+docker version
+aws --version
+git --version
+
+# ------------------------------------------------------------
+# Docker Compose plugin
+# ------------------------------------------------------------
+
+install -d -m 0755 /usr/local/lib/docker/cli-plugins
+
+curl --fail \
+  --location \
+  --retry 5 \
+  --retry-delay 3 \
+  "https://github.com/docker/compose/releases/download/${compose_version}/docker-compose-linux-x86_64" \
+  --output /usr/local/lib/docker/cli-plugins/docker-compose
+
+curl --fail \
+  --location \
+  --retry 5 \
+  --retry-delay 3 \
+  "https://github.com/docker/compose/releases/download/${compose_version}/checksums.txt" \
+  --output /tmp/docker-compose-checksums.txt
+
+EXPECTED_SHA256=$(
+  awk '$2 ~ /docker-compose-linux-x86_64$/ {print $1}' \
+    /tmp/docker-compose-checksums.txt
+)
+
+test -n "$EXPECTED_SHA256"
+
+echo "$EXPECTED_SHA256  /usr/local/lib/docker/cli-plugins/docker-compose" \
+  | sha256sum --check -
+
+chmod 0755 /usr/local/lib/docker/cli-plugins/docker-compose
+
+docker compose version
+
+# ------------------------------------------------------------
+# Clone the exact application version
+# ------------------------------------------------------------
+
+rm -rf /opt/vprofile
+
+git clone \
+  --branch "${source_branch}" \
+  --single-branch \
+  "${source_repository_url}" \
+  /opt/vprofile
+
+git -C /opt/vprofile checkout \
+  --detach \
+  "${source_commit}"
+
+echo "Deployed Git commit:"
+git -C /opt/vprofile rev-parse HEAD
+
+# ------------------------------------------------------------
+# Generate runtime secrets locally on the instance
+#
+# No passwords are stored in Git, Terraform variables,
+# Terraform state, or EC2 User Data.
+# ------------------------------------------------------------
+
+install -d -m 0700 /opt/vprofile/secrets
+umask 077
+
+for secret_file in \
+  mysql_root_password.txt \
+  mysql_app_password.txt \
+  rabbitmq_password.txt
+do
+  if [ ! -s "/opt/vprofile/secrets/$secret_file" ]; then
+    openssl rand -hex 32 > "/opt/vprofile/secrets/$secret_file"
+  fi
+done
+
+chmod 0444 /opt/vprofile/secrets/*.txt
+
+# ------------------------------------------------------------
+# Select the ECR application image
+# ------------------------------------------------------------
+
+cat > /opt/vprofile/.env <<EOF
+APP_IMAGE=${app_image}
+EOF
+
+chmod 0600 /opt/vprofile/.env
+
+# ------------------------------------------------------------
+# Authenticate Docker to ECR
+#
+# Retry because IAM role propagation may take a few seconds
+# immediately after instance creation.
+# ------------------------------------------------------------
+
+LOGIN_OK=0
+
+for attempt in $(seq 1 12)
+do
+  echo "ECR login attempt: $attempt"
+
+  if aws ecr get-login-password \
+      --region "${aws_region}" \
+    | docker login \
+      --username AWS \
+      --password-stdin "${ecr_registry}"
+  then
+    LOGIN_OK=1
+    break
+  fi
+
+  sleep 10
+done
+
+if [ "$LOGIN_OK" -ne 1 ]; then
+  echo "ERROR: Unable to authenticate Docker to ECR."
+  exit 1
+fi
+
+# ------------------------------------------------------------
+# Pull and start the complete Compose stack
+# ------------------------------------------------------------
+
+cd /opt/vprofile
+
+docker compose config
+
+docker compose pull
+
+docker compose up \
+  --detach \
+  --wait \
+  --wait-timeout 600
+
+docker compose ps
+
+# ------------------------------------------------------------
+# Final local application check
+# ------------------------------------------------------------
+
+curl --fail \
+  --silent \
+  --show-error \
+  --retry 12 \
+  --retry-delay 5 \
+  http://127.0.0.1:8080/login \
+  --output /dev/null
+
+echo "============================================================"
+echo "VProfile bootstrap completed successfully"
+echo "============================================================"
